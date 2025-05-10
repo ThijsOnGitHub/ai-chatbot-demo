@@ -1,5 +1,5 @@
 import { toolSchemas } from "@/lib/tools";
-import { azure } from "@ai-sdk/azure";
+import { azureFoundry } from "@/provider/AzureFoundryProvider";
 import { OpenAIResponsesProviderOptions } from "@ai-sdk/openai/internal";
 import { streamText } from "ai";
 
@@ -10,12 +10,14 @@ export async function POST(req: Request) {
   const { messages } = await req.json();
 
   const result = streamText({
-    model: azure("gpt-4o"),
+    model: azureFoundry({
+      agentId: "asst_J239iSJG5Gqwa83NE58DL8j2",
+    }),
     maxSteps: 10,
     messages,
     providerOptions: {
       openai: {
-        store: true
+        store: true,
       } satisfies OpenAIResponsesProviderOptions,
     },
     tools: toolSchemas,

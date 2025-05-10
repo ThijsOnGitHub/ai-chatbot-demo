@@ -1,4 +1,4 @@
-import { AIProjectsClient } from "@azure/ai-projects";
+import { AIProjectsClient, MessageStreamEvent } from "@azure/ai-projects";
 import { DefaultAzureCredential, type TokenCredential } from "@azure/identity";
 import { generateId, loadApiKey, withoutTrailingSlash } from "@ai-sdk/provider-utils";
 import { LanguageModelV1, LanguageModelV1CallWarning, LanguageModelV1StreamPart, LanguageModelV1CallOptions } from "@ai-sdk/provider";
@@ -206,97 +206,94 @@ export class CustomChatLanguageModel implements LanguageModelV1 {
       content: typeof lastMessage.content === "string" ? lastMessage.content : JSON.stringify(lastMessage.content),
     });
 
-    // Run starten
-    const run = await client.agents.createRun(threadId, agentId);
-    const pollIntervalMs = this._settings.pollIntervalMs ?? 1000;
-
     // Create a real streaming implementation
+
     const stream = new ReadableStream<LanguageModelV1StreamPart>({
       async start(controller) {
-        // Metadata event
-        controller.enqueue({
-          type: "response-metadata",
-          id: "azure-foundry-response-" + Date.now(),
-          timestamp: new Date(),
-          modelId: "azure-foundry-stream",
-        });
-
         try {
-          // Track the messages we've already processed and their content
-          const processedMessageIds = new Set<string>();
-          const processedContentIds = new Set<string>();
-          let latestContent = "";
-          let currentRun = run;
+          // Maak thread en stuur het user-bericht
+          // Start Foundry-run in streamingmodus
+          const stream = await client.agents.createRun(threadId, agentId).stream();
 
-          // Poll for messages while the run is in progress
-          while (currentRun.status === "queued" || currentRun.status === "in_progress") {
-            if (options.abortSignal?.aborted) {
-              throw new Error("Request aborted");
-              break;
-            }
+          // Voor elke delta: enqueue een chunk
+          for await (const ev of stream) {
+            console.log("Event:", ev);
+            switch (ev.event) {
+              case MessageStreamEvent.ThreadMessageInProgress:
+                // Bericht is in behandeling, niets te doen
+                break;
 
-            // Get the latest messages
-            const messages = await client.agents.listMessages(threadId, { limit: 100, order: "asc" });
+              case MessageStreamEvent.ThreadMessageCreated:
+                // Nieuw bericht is aangemaakt, maar nog zonder inhoud
+                break;
+              case MessageStreamEvent.ThreadMessageCompleted:
+                // Bericht is compleet, voeg usage informatie toe en sluit de stream
+                // Verzamel eventuele usage informatie van de run
+                const runDetails = await client.agents.getRun(threadId, agentId);
+                const usage = {
+                  promptTokens: runDetails?.usage?.promptTokens ?? 0,
+                  completionTokens: runDetails?.usage?.completionTokens ?? 0,
+                };
 
-            // Process only assistant messages
-            const assistantMessages = messages.data.filter((m) => m.role === "assistant");
+                // Stuur finish event
+                controller.enqueue({
+                  type: "finish",
+                  finishReason: "stop",
+                  usage,
+                });
 
-            // Handle case where we have new messages
-            for (const message of assistantMessages) {
-              // For new messages, process all content
-              if (!processedMessageIds.has(message.id)) {
-                processedMessageIds.add(message.id);
+                controller.close();
+                break;
+              case MessageStreamEvent.ThreadMessageDelta:
+                // Delta ontvangen, stuur nieuwe content naar de stream
+                if (ev.data && typeof ev.data === "object") {
+                  // Controleer of we de content kunnen ophalen uit de juiste velden
+                  // afhankelijk van de structuur van de data
+                  let textContent: string | undefined;
 
-                // Process each text content segment
-                for (const contentItem of message.content.filter((c) => c.type === "text")) {
-                  if ("text" in contentItem && typeof contentItem.text === "object" && contentItem.text && "value" in contentItem.text) {
-                    const contentId = `${message.id}-${contentItem.text.value}`;
-                    if (!processedContentIds.has(contentId)) {
-                      processedContentIds.add(contentId);
-
-                      // Only send new content as delta
-                      const content = contentItem.text.value;
-                      if (content !== latestContent) {
-                        // If we have completely new content, send it as a delta
-                        controller.enqueue({
-                          type: "text-delta",
-                          textDelta: content,
-                        });
-                        latestContent = content;
+                  // Poging 1: Als data een delta property heeft
+                  const anyData = ev.data as any;
+                  if (anyData.delta?.content) {
+                    for (const contentItem of anyData.delta.content) {
+                      if (contentItem.type === "text" && contentItem.text?.value) {
+                        textContent = contentItem.text.value;
                       }
                     }
                   }
+                  // Poging 2: Als data zelf een event met content is
+                  else if (anyData.content) {
+                    for (const contentItem of anyData.content) {
+                      if (contentItem.type === "text" && contentItem.text?.value) {
+                        textContent = contentItem.text.value;
+                      }
+                    }
+                  }
+                  // Poging 3: Als data direct een string is
+                  else if (typeof ev.data === "string") {
+                    textContent = ev.data;
+                  }
+
+                  // Als we content hebben gevonden, stream het
+                  if (textContent) {
+                    controller.enqueue({
+                      type: "text-delta",
+                      textDelta: textContent,
+                    });
+                  }
                 }
-              }
+                break;
+
+              case MessageStreamEvent.ThreadMessageIncomplete:
+                controller.error(new Error("Message incomplete"));
+                break;
             }
-
-            // Pause before checking again
-            await new Promise((r) => setTimeout(r, pollIntervalMs));
-
-            // Get the latest run status
-            currentRun = await client.agents.getRun(threadId, run.id);
           }
-
-          // Once complete, get usage information
-          const usage = {
-            promptTokens: currentRun.usage?.promptTokens ?? 0,
-            completionTokens: currentRun.usage?.completionTokens ?? 0,
-          };
-
-          // Send finish event
-          controller.enqueue({
-            type: "finish",
-            finishReason: "stop",
-            usage,
-          });
-        } catch (error) {
-          // Handle errors in the stream
-          controller.error(error);
-        } finally {
-          controller.close();
+        } catch (err) {
+          controller.error(err);
         }
       },
     });
+
     return {
       stream,
       rawCall: {
