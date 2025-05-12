@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 // Define all tool schemas in one place
-export const toolSchemas = {
+export const AiToolSchemas = {
   throwConfetti: {
     description: "Throw confetti to celebrate with the user",
     parameters: z.object({
@@ -17,12 +17,12 @@ export const toolSchemas = {
 };
 
 // Export type for the tool names
-export type ToolName = keyof typeof toolSchemas;
+export type ToolName = keyof typeof AiToolSchemas;
 
 // Generate types for each tool's parameters based on the Zod schema
 export type ToolParameters = {
   [K in ToolName]: {
     toolName: K;
-    args: z.infer<(typeof toolSchemas)[K]["parameters"]>;
+    args: z.infer<(typeof AiToolSchemas)[K]["parameters"]>;
   };
-}[keyof typeof toolSchemas];
+}[keyof typeof AiToolSchemas];

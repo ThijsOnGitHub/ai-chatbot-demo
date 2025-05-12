@@ -1,6 +1,5 @@
-import { toolSchemas } from "@/lib/tools";
-import { azureFoundry } from "@/provider/AzureFoundryProvider";
-import { OpenAIResponsesProviderOptions } from "@ai-sdk/openai/internal";
+import { AiToolSchemas } from "@/lib/tools";
+import { azure } from "@ai-sdk/azure";
 import { streamText } from "ai";
 
 // Allow streaming responses up to 30 seconds
@@ -10,17 +9,10 @@ export async function POST(req: Request) {
   const { messages } = await req.json();
 
   const result = streamText({
-    model: azureFoundry({
-      agentId: "asst_J239iSJG5Gqwa83NE58DL8j2",
-    }),
+    model: azure("gpt-4.1"),
     maxSteps: 10,
     messages,
-    providerOptions: {
-      openai: {
-        store: true,
-      } satisfies OpenAIResponsesProviderOptions,
-    },
-    tools: toolSchemas,
+    tools: AiToolSchemas,
   });
 
   return result.toDataStreamResponse({

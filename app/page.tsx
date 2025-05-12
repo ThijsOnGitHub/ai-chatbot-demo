@@ -1,22 +1,34 @@
 "use client";
 import { useChat } from "@ai-sdk/react";
-import { PartyPopper, Send } from "lucide-react";
+import { PartyPopper, Send, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import confetti from "canvas-confetti";
 import { ToolParameters } from "@/lib/tools";
+import { useFileUpload } from "@/hooks/use-file-upload";
+import { useAutoscroll } from "@/hooks/use-autoscroll";
+import { AttachmentPreviewItem } from "@/components/chat/attachment-preview-item";
+import { MessageAttachment } from "@/components/chat/message-attachment";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 export default function ChatPage() {
-  const { messages, input, handleInputChange, handleSubmit, isLoading } = useChat({
+  const { attachments, fileInputRef, handleFileClick, handleFileChange, handleRemoveFile, resetAttachments, getAttachmentFileList } = useFileUpload();
+
+  const {
+    messages,
+    input,
+    handleInputChange,
+    isLoading,
+    handleSubmit: originalHandleSubmit,
+  } = useChat({
     maxSteps: 10,
-    
     onToolCall({ toolCall }) {
       console.log("Tool call:", toolCall);
       const toolCallTyped = toolCall as unknown as ToolParameters;
       if (toolCallTyped.toolName === "throwConfetti") {
-  
         throwConfettiWithParams();
         return "Throwing confetti...";
       }
@@ -28,6 +40,15 @@ export default function ChatPage() {
     },
   });
 
+  // Custom handleSubmit to include file attachments
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    originalHandleSubmit(event, {
+      experimental_attachments: getAttachmentFileList(),
+    });
+    // Reset attachments after sending
+    resetAttachments();
+  };
 
   // Function to trigger confetti with specified parameters
   const throwConfettiWithParams = (particleCount: number = 100, spread: number = 70, y: number = 0.6) => {
@@ -43,6 +64,13 @@ export default function ChatPage() {
     throwConfettiWithParams();
   };
 
+  // Set up autoscroll for messages
+  const scrollRef = useAutoscroll({
+    deps: [messages],
+    enabled: true,
+    smooth: true,
+  });
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-gray-50 dark:bg-gray-900">
       <Card className="w-full max-w-2xl h-[600px] flex flex-col">
@@ -53,7 +81,7 @@ export default function ChatPage() {
           </Button>
         </div>
 
-        <ScrollArea className="flex-1 p-4">
+        <ScrollArea className="flex-1 p-4" viewportRef={scrollRef}>
           <div className="space-y-4">
             {messages.length === 0 && (
               <div className="flex items-center justify-center h-full">
@@ -61,20 +89,45 @@ export default function ChatPage() {
               </div>
             )}
 
-            {messages.map((message) => (
+            {messages.map((message: any) => (
               <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[80%] rounded-lg p-3 ${message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>{message.content}</div>
+                <article className={`max-w-[80%] rounded-lg p-3 whitespace-break-spaces prose ${message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                  <div className="prose ">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                  </div>
+
+                  {message.experimental_attachments && message.experimental_attachments.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {message.experimental_attachments.map((file: any, index: number) => (
+                        <MessageAttachment key={index} file={file} />
+                      ))}
+                    </div>
+                  )}
+                </article>
               </div>
             ))}
           </div>
         </ScrollArea>
 
         <div className="p-4 border-t">
-          <form onSubmit={handleSubmit} className="flex gap-2">
-            <Input value={input} onChange={handleInputChange} placeholder="Type your message..." className="flex-1" disabled={isLoading} />
-            <Button type="submit" size="icon" disabled={isLoading}>
-              <Send className="h-4 w-4" />
-            </Button>
+          <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-2">
+                {attachments.map((attachment, index) => (
+                  <AttachmentPreviewItem key={index} attachment={attachment} index={index} onRemove={handleRemoveFile} />
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Input value={input} onChange={handleInputChange} placeholder="Type your message..." className="flex-1" disabled={isLoading} />
+              <Button type="button" size="icon" variant="outline" onClick={handleFileClick} disabled={isLoading}>
+                <Paperclip className="h-4 w-4" />
+              </Button>
+              <Button type="submit" size="icon" disabled={isLoading || (input.trim() === "" && attachments.length === 0)}>
+                <Send className="h-4 w-4" />
+              </Button>
+              <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple />
+            </div>
           </form>
         </div>
       </Card>
